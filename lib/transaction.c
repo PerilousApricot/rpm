@@ -379,11 +379,9 @@ static int handleColorConflict(rpmts ts,
  * @param ts		transaction set
  * @param p		current transaction element
  * @param fi		file info set
- * @param fx		file index
- * @param otherHeader	header containing the matching file
- * @param otherFi	matching file info set
- * @param ofx		matching file index
- * @param beingRemoved  file being removed (installed otherwise)
+ * @param shared	shared file info
+ * @param sharedCount	no. of shared elements
+ * @param reportConflicts
  */
 /* XXX only ts->{probs,rpmdb} modified */
 static void handleInstInstalledFile(const rpmts ts, rpmte p, rpmfiles fi, int fx,
@@ -589,9 +587,6 @@ assert(otherFi != NULL);
 		    if (!(oflags & RPMFILE_GHOST)) {
 			rpmfsSetAction(fs, i, FA_SKIP);
 		    }
-		/* if the other file is color skipped then skip this file too */
-		} else if (oaction == FA_SKIPCOLOR) {
-		    rpmfsSetAction(fs, i, FA_SKIPCOLOR);
 		}
 	    }
 
@@ -656,6 +651,7 @@ assert(otherFi != NULL);
  * @param tspool	transaction string pool
  * @param p		current transaction element
  * @param h		installed header
+ * @param ps		problem set
  */
 static void ensureOlder(rpmstrPool tspool, const rpmte p, const Header h)
 {
@@ -747,8 +743,7 @@ static void skipEraseFiles(const rpmts ts, rpmfiles files, rpmfs fs)
 /**
  * Skip any files that do not match install policies.
  * @param ts		transaction set
- * @param files		file info set
- * @param fs		file states
+ * @param fi		file info set
  */
 static void skipInstallFiles(const rpmts ts, rpmfiles files, rpmfs fs)
 {
@@ -851,8 +846,7 @@ static void skipInstallFiles(const rpmts ts, rpmfiles files, rpmfs fs)
     }
 
     /* Skip (now empty) directories that had skipped files. */
-    /* Iterate over dirs in reversed order to solve subdirs at first */
-    for (j = dc - 1; j >= 0; j--) {
+    for (j = 0; j < dc; j++) {
 	const char * dn, * bn;
 	size_t dnlen, bnlen;
 
@@ -893,11 +887,6 @@ static void skipInstallFiles(const rpmts ts, rpmfiles files, rpmfs fs)
 		continue;
 	    rpmlog(RPMLOG_DEBUG, "excluding directory %s\n", dn);
 	    rpmfsSetAction(fs, i, FA_SKIPNSTATE);
-	    ix = rpmfiDX(fi);
-	    /* Decrease count of files for parent directory */
-	    drc[ix]--;
-	    /* Mark directory because something was removed from them */
-	    dff[ix] = 1;
 	    break;
 	}
     }
@@ -913,8 +902,8 @@ static void skipInstallFiles(const rpmts ts, rpmfiles files, rpmfs fs)
 
 #define HASHTYPE rpmStringSet
 #define HTKEYTYPE rpmsid
-#include "lib/rpmhash.H"
-#include "lib/rpmhash.C"
+#include "lib/rpmhash_big.h"
+#include "lib/rpmhash_big.c"
 
 static unsigned int sidHash(rpmsid sid)
 {
@@ -1031,7 +1020,7 @@ void checkInstalledFiles(rpmts ts, uint64_t fileCount, fingerPrintCache fpc)
 
 	/* Is this package being removed? */
 	installedPkg = rpmdbGetIteratorOffset(mi);
-	if (packageHashGetEntry(tsmem->removedPackages, installedPkg,
+	if (removedHashGetEntry(tsmem->removedPackages, installedPkg,
 				&removedPkg, NULL, NULL)) {
 	    beingRemoved = 1;
 	    otherFi = rpmteFiles(removedPkg[0]);
@@ -1192,11 +1181,7 @@ static int runTransScripts(rpmts ts, pkgGoal goal)
     int rc = 0;
     rpmte p;
     rpmtsi pi = rpmtsiInit(ts);
-    rpmElementTypes types = TR_ADDED;
-    if (goal == PKG_TRANSFILETRIGGERUN)
-	types = TR_REMOVED;
-
-    while ((p = rpmtsiNext(pi, types)) != NULL) {
+    while ((p = rpmtsiNext(pi, TR_ADDED)) != NULL) {
 	rc += rpmteProcess(p, goal);
     }
     rpmtsiFree(pi);
@@ -1394,474 +1379,6 @@ rpmRC rpmtsSetupTransactionPlugins(rpmts ts)
 
     return rc;
 }
-/**
- * Run a scriptlet with args.
- *
- * Run a script with an interpreter. If the interpreter is not specified,
- * /bin/sh will be used. If the interpreter is /bin/sh, then the args from
- * the header will be ignored, passing instead arg1 and arg2.
- *
- * @param ts		transaction set
- * @param te		transaction element
- * @param prefixes	install prefixes
- * @param script	scriptlet from header
- * @param arg1		no. instances of package installed after scriptlet exec
- *			(-1 is no arg)
- * @param arg2		ditto, but for the target package
- * @return		0 on success
- */
-rpmRC runScript(rpmts ts, rpmte te, ARGV_const_t prefixes,
-		       rpmScript script, int arg1, int arg2)
-{
-    rpmRC stoprc, rc = RPMRC_OK;
-    rpmTagVal stag = rpmScriptTag(script);
-    FD_t sfd = NULL;
-    int warn_only = (stag != RPMTAG_PREIN &&
-		     stag != RPMTAG_PREUN &&
-		     stag != RPMTAG_PRETRANS &&
-		     stag != RPMTAG_VERIFYSCRIPT);
-
-    sfd = rpmtsNotify(ts, te, RPMCALLBACK_SCRIPT_START, stag, 0);
-    if (sfd == NULL)
-	sfd = rpmtsScriptFd(ts);
-
-    rpmswEnter(rpmtsOp(ts, RPMTS_OP_SCRIPTLETS), 0);
-    rc = rpmScriptRun(script, arg1, arg2, sfd,
-		      prefixes, warn_only, rpmtsPlugins(ts));
-    rpmswExit(rpmtsOp(ts, RPMTS_OP_SCRIPTLETS), 0);
-
-    /* Map warn-only errors to "notfound" for script stop callback */
-    stoprc = (rc != RPMRC_OK && warn_only) ? RPMRC_NOTFOUND : rc;
-    rpmtsNotify(ts, te, RPMCALLBACK_SCRIPT_STOP, stag, stoprc);
-
-    /*
-     * Notify callback for all errors. "total" abused for warning/error,
-     * rc only reflects whether the condition prevented install/erase
-     * (which is only happens with %prein and %preun scriptlets) or not.
-     */
-    if (rc != RPMRC_OK) {
-	if (warn_only) {
-	    rc = RPMRC_OK;
-	}
-	rpmtsNotify(ts, te, RPMCALLBACK_SCRIPT_ERROR, stag, rc);
-    }
-
-    return rc;
-}
-
-/*
- * Get files from next package from match iterator. If files are
- * available in memory then don't read them from rpmdb.
- */
-static rpmfiles rpmtsNextFiles(rpmts ts, rpmdbMatchIterator mi)
-{
-    Header h;
-    rpmte *te;
-    rpmfiles files = NULL;
-    rpmstrPool pool = ts->members->pool;
-    int ix;
-    unsigned int offset;
-
-    ix = rpmdbGetIteratorIndex(mi);
-    if (ix < rpmdbGetIteratorCount(mi)) {
-	offset = rpmdbGetIteratorOffsetFor(mi, ix);
-	if (packageHashGetEntry(ts->members->removedPackages, offset,
-				&te, NULL, NULL)) {
-	    /* Files are available in memory */
-	    files  = rpmteFiles(te[0]);
-	}
-
-	if (packageHashGetEntry(ts->members->installedPackages, offset,
-				&te, NULL, NULL)) {
-	    /* Files are available in memory */
-	    files  = rpmteFiles(te[0]);
-	}
-    }
-
-    if (files) {
-	rpmdbSetIteratorIndex(mi, ix + 1);
-    } else {
-	/* Files are not available in memory. Read them from rpmdb */
-	h = rpmdbNextIterator(mi);
-	if (h) {
-	    files = rpmfilesNew(pool, h, RPMTAG_BASENAMES,
-				RPMFI_FLAGS_ONLY_FILENAMES);
-	}
-    }
-
-    return files;
-}
-
-
-typedef struct matchFilesIter_s {
-    rpmts ts;
-    rpmds rpmdsTrigger;
-    rpmfiles files;
-    rpmfi fi;
-    const char *pfx;
-    rpmdbMatchIterator pi;
-    packageHash tranPkgs;
-} *matchFilesIter;
-
-static matchFilesIter matchFilesIterator(rpmds trigger, rpmfiles files)
-{
-    matchFilesIter mfi = xcalloc(1, sizeof(*mfi));
-    rpmdsInit(trigger);
-    mfi->rpmdsTrigger = trigger;
-    mfi->files = rpmfilesLink(files);
-    return mfi;
-}
-
-static matchFilesIter matchDBFilesIterator(rpmds trigger, rpmts ts,
-					    int inTransaction)
-{
-    matchFilesIter mfi = xcalloc(1, sizeof(*mfi));
-    rpmsenseFlags sense;
-
-    rpmdsSetIx(trigger, 0);
-    sense = rpmdsFlags(trigger);
-    rpmdsInit(trigger);
-
-    mfi->rpmdsTrigger = trigger;
-    mfi->ts = ts;
-
-    /* If inTransaction is set then filter out packages that aren't in transaction */
-    if (inTransaction) {
-	if (sense & RPMSENSE_TRIGGERIN)
-	    mfi->tranPkgs = ts->members->installedPackages;
-	else
-	    mfi->tranPkgs = ts->members->removedPackages;
-    }
-    return mfi;
-}
-
-static const char *matchFilesNext(matchFilesIter mfi)
-{
-    const char *matchFile = NULL;
-    int fx = 0;
-
-    /* Decide if we iterate over given files (mfi->files) */
-    if (!mfi->ts)
-	do {
-	    /* Get next file from mfi->fi */
-	    rpmfiNext(mfi->fi);
-	    matchFile = rpmfiFN(mfi->fi);
-	    if (strlen(matchFile))
-		break;
-	    matchFile = NULL;
-
-	    /* If we are done with current mfi->fi, create mfi->fi for next prefix */
-	    fx = rpmdsNext(mfi->rpmdsTrigger);
-	    mfi->pfx = rpmdsN(mfi->rpmdsTrigger);
-	    rpmfiFree(mfi->fi);
-	    mfi->fi = rpmfilesFindPrefix(mfi->files, mfi->pfx);
-
-	} while (fx >= 0);
-    /* or we iterate over files in rpmdb */
-    else
-	do {
-	    rpmfiNext(mfi->fi);
-	    matchFile = rpmfiFN(mfi->fi);
-	    if (strlen(matchFile))
-		break;
-	    matchFile = NULL;
-
-	    /* If we are done with current mfi->fi, create mfi->fi for next package */
-	    rpmfilesFree(mfi->files);
-	    rpmfiFree(mfi->fi);
-	    mfi->files = rpmtsNextFiles(mfi->ts, mfi->pi);
-	    mfi->fi = rpmfilesFindPrefix(mfi->files, mfi->pfx);
-	    if (mfi->files)
-		continue;
-
-	    /* If we are done with all packages, go through packages with new prefix */
-	    fx = rpmdsNext(mfi->rpmdsTrigger);
-	    mfi->pfx = rpmdsN(mfi->rpmdsTrigger);
-	    rpmdbFreeIterator(mfi->pi);
-	    mfi->pi = rpmdbInitPrefixIterator(rpmtsGetRdb(mfi->ts),
-						RPMDBI_DIRNAMES, mfi->pfx, 0);
-
-	    rpmdbFilterIterator(mfi->pi, mfi->tranPkgs, 0);
-	    rpmdbUniqIterator(mfi->pi);
-
-	} while (fx >= 0);
-
-
-    return matchFile;
-}
-
-static int matchFilesEmpty(matchFilesIter mfi)
-{
-    const char *matchFile;
-
-    /* Try to get the first file */
-    matchFile = matchFilesNext(mfi);
-
-    /* Rewind back this file */
-    rpmfiInit(mfi->fi, 0);
-
-    if (matchFile)
-	/* We have at least one file so iterator is not empty */
-	return 0;
-    else
-	/* No file in iterator */
-	return 1;
-}
-
-static matchFilesIter matchFilesIteratorFree(matchFilesIter mfi)
-{
-    rpmfiFree(mfi->fi);
-    rpmfilesFree(mfi->files);
-    rpmdbFreeIterator(mfi->pi);
-    free(mfi);
-    return NULL;
-}
-
-/*
- * Run all file triggers in header h
- * @param searchMode	    0 match trigger prefixes against files in te
- *			    1 match trigger prefixes against files in whole ts
- *			    2 match trigger prefixes against files in whole
- *			      rpmdb
- */
-static int runHandleTriggersInPkg(rpmts ts, rpmte te, Header h,
-				rpmsenseFlags sense, rpmscriptTriggerModes tm,
-				int searchMode)
-{
-    int nerrors = 0;
-    rpmds rpmdsTriggers, rpmdsTrigger;
-    int ti = 0;
-    rpmfiles files = NULL;
-    matchFilesIter mfi = NULL;
-    rpmScript script;
-    struct rpmtd_s installPrefixes;
-    char *(*inputFunc)(void *);
-
-    rpmdsTriggers = rpmdsNew(h, triggerDsTag(tm), 0);
-
-    /* Loop over triggers in pakage (in header h) */
-    while ((rpmdsTrigger = rpmdsFilterTi(rpmdsTriggers, ti))) {
-	/*
-	 * Now rpmdsTrigger contains all dependencies belonging to one trigger
-	 * with trigger index tix. Have a look at the first one to check flags.
-	 */
-	if ((rpmdsNext(rpmdsTrigger) >= 0) &&
-	    (rpmdsFlags(rpmdsTrigger) & sense)) {
-
-	    switch (searchMode) {
-		case 0:
-		    /* Create iterator over files in te that this trigger matches */
-		    files = rpmteFiles(te);
-		    mfi = matchFilesIterator(rpmdsTrigger, files);
-		    break;
-		case 1:
-		    /* Create iterator over files in ts that this trigger matches */
-		    mfi = matchDBFilesIterator(rpmdsTrigger, ts, 1);
-		    break;
-		case 2:
-		    /* Create iterator over files in whole rpmd that this trigger matches */
-		    mfi = matchDBFilesIterator(rpmdsTrigger, ts, 0);
-		    break;
-	    }
-
-	    /* If this trigger matches any file then run trigger script */
-	    if (!matchFilesEmpty(mfi)) {
-		script = rpmScriptFromTriggerTag(h, triggertag(sense), tm, ti);
-
-		headerGet(h, RPMTAG_INSTPREFIXES, &installPrefixes,
-			HEADERGET_ALLOC|HEADERGET_ARGV);
-
-
-		/*
-		 * As input function set function to get next file from
-		 * matching file iterator. As parameter for this function
-		 * set matching file iterator. Input function will be called
-		 * during execution of trigger script in order to get data
-		 * that will be passed as stdin to trigger script. To get
-		 * these data from lua script function rpm.input() can be used.
-		 */
-		inputFunc = (char *(*)(void *)) matchFilesNext;
-		rpmScriptSetNextFileFunc(script, inputFunc, mfi);
-
-		nerrors += runScript(ts, te, installPrefixes.data,
-				    script, 0, 0);
-		rpmtdFreeData(&installPrefixes);
-		rpmScriptFree(script);
-	    }
-	    rpmfilesFree(files);
-	    matchFilesIteratorFree(mfi);
-	}
-	rpmdsFree(rpmdsTrigger);
-	ti++;
-    }
-    rpmdsFree(rpmdsTriggers);
-
-    return nerrors;
-}
-
-/* Return true if any file in package (te) starts with pfx */
-static int matchFilesInPkg(rpmts ts, rpmte te, const char *pfx,
-			    rpmsenseFlags sense)
-{
-    int rc;
-    rpmfiles files = rpmteFiles(te);
-    rpmfi fi = rpmfilesFindPrefix(files, pfx);
-
-    rc = (fi != NULL);
-    rpmfilesFree(files);
-    rpmfiFree(fi);
-    return rc;
-}
-
-/* Return true if any added/removed file in ts starts with pfx */
-static int matchFilesInTran(rpmts ts, rpmte te, const char *pfx,
-			    rpmsenseFlags sense)
-{
-    int rc = 1;
-    rpmdbMatchIterator pi;
-
-    /* Get all files from rpmdb starting with pfx */
-    pi = rpmdbInitPrefixIterator(rpmtsGetRdb(ts), RPMDBI_DIRNAMES, pfx, 0);
-
-    if (sense & RPMSENSE_TRIGGERIN)
-	/* Leave in pi only files installed in ts */
-	rpmdbFilterIterator(pi, ts->members->installedPackages, 0);
-    else
-	/* Leave in pi only files removed in ts */
-	rpmdbFilterIterator(pi, ts->members->removedPackages, 0);
-
-    rc = rpmdbGetIteratorCount(pi);
-    rpmdbFreeIterator(pi);
-
-    return rc;
-}
-
-/*
- * It runs file triggers in other package(s) this package/transaction sets off.
- * If tm is RPMSCRIPT_FILETRIGGERSCRIPT then it runs file triggers that are
- * fired by files in transaction entry. If tm is RPMSCRIPT_TRANSFILETRIGGERSCRIPT
- * then it runs file triggers that are fired by all files in transaction set.
- * In that case te can be NULL.
- *
- * @param ts		transaction set
- * @param te		transaction entry
- * @param sense		defines which triggers should be set off (triggerin,
- *			triggerun, triggerpostun)
- * @param tm		trigger mode, (filetrigger/transfiletrigger)
- */
-rpmRC runFileTriggers(rpmts ts, rpmte te, rpmsenseFlags sense,
-			rpmscriptTriggerModes tm)
-{
-    int nerrors = 0;
-    rpmdbIndexIterator ii;
-    rpmdbMatchIterator mi;
-    const void *key;
-    char *pfx;
-    size_t keylen;
-    Header trigH;
-    int (*matchFunc)(rpmts, rpmte, const char*, rpmsenseFlags sense);
-
-    /* Decide if we match triggers against files in te or in whole ts */
-    if (tm == RPMSCRIPT_FILETRIGGER)
-	matchFunc = matchFilesInPkg;
-    else
-	matchFunc = matchFilesInTran;
-
-    ii = rpmdbIndexIteratorInit(rpmtsGetRdb(ts), triggerDsTag(tm));
-    mi = rpmdbNewIterator(rpmtsGetRdb(ts), RPMDBI_PACKAGES);
-
-    /* Loop over all file triggers in rpmdb */
-    while ((rpmdbIndexIteratorNext(ii, &key, &keylen)) == 0) {
-	pfx = xmalloc(keylen + 1);
-	memcpy(pfx, key, keylen);
-	pfx[keylen] = '\0';
-
-	/* Check if file trigger is fired by any file in ts/te */
-	if (matchFunc(ts, te, pfx, sense))
-	    /* If yes then store it */
-	    rpmdbAppendIterator(mi, rpmdbIndexIteratorPkgOffsets(ii),
-				rpmdbIndexIteratorNumPkgs(ii));
-	free(pfx);
-    }
-    rpmdbIndexIteratorFree(ii);
-
-    rpmdbUniqIterator(mi);
-    /*
-     * Don't handle transaction triggers installed in current transaction
-     * to avoid executing the same script two times. These triggers are
-     * handled in runImmedFileTriggers().
-     */
-    if (tm == RPMSCRIPT_TRANSFILETRIGGER) {
-	rpmdbFilterIterator(mi, ts->members->removedPackages, 1);
-	rpmdbFilterIterator(mi, ts->members->installedPackages, 1);
-    }
-
-    /* Handle stored triggers */
-    if (rpmdbGetIteratorCount(mi)) {
-	while((trigH = rpmdbNextIterator(mi)) != NULL) {
-
-	    if (tm == RPMSCRIPT_FILETRIGGER)
-		nerrors += runHandleTriggersInPkg(ts, te, trigH, sense, tm, 0);
-	    else
-		nerrors += runHandleTriggersInPkg(ts, te, trigH, sense, tm, 1);
-	}
-    }
-    rpmdbFreeIterator(mi);
-
-    return (nerrors == 0) ? RPMRC_OK : RPMRC_FAIL;
-}
-
-/* Run file triggers in this te other package(s) set off.
- * @param ts		transaction set
- * @param te		transaction entry
- * @param sense		defines which triggers should be set off (triggerin,
- *			triggerun, triggerpostun)
- * @param tm		trigger mode, (filetrigger/transfiletrigger)
- */
-rpmRC runImmedFileTriggers(rpmts ts, rpmte te, rpmsenseFlags sense,
-			    rpmscriptTriggerModes tm)
-{
-    int nerrors = 0;
-
-    nerrors += runHandleTriggersInPkg(ts, te, rpmteHeader(te), sense, tm, 2);
-    return (nerrors == 0) ? RPMRC_OK : RPMRC_FAIL;
-}
-
-/* Run triggers stored in ts */
-static int runPostUnTransFileTrigs(rpmts ts)
-{
-    int i;
-    Header trigH;
-    struct rpmtd_s installPrefixes;
-    rpmScript script;
-    int nerrors = 0;
-
-    rpmtsUniqTriggers(ts);
-    /* Iterate over stored triggers */
-    for (i = 0; i < ts->trigs2run.count; i++) {
-	/* Get header containing trigger script */
-	trigH = rpmdbGetHeaderAt(rpmtsGetRdb(ts),
-				ts->trigs2run.trigger[i].hdrNum);
-
-	/* Maybe package whith this trigger is already uninstalled */
-	if (trigH == NULL)
-	    continue;
-
-	/* Prepare and run script */
-	script = rpmScriptFromTriggerTag(trigH, RPMSENSE_TRIGGERPOSTUN,
-		RPMSCRIPT_TRANSFILETRIGGER, ts->trigs2run.trigger[i].index);
-
-	headerGet(trigH, RPMTAG_INSTPREFIXES, &installPrefixes,
-		HEADERGET_ALLOC|HEADERGET_ARGV);
-
-	nerrors += runScript(ts, NULL, installPrefixes.data, script, 0, 0);
-	rpmtdFreeData(&installPrefixes);
-	rpmScriptFree(script);
-	headerFree(trigH);
-
-    }
-    return nerrors;
-}
 
 int rpmtsRun(rpmts ts, rpmps okProbs, rpmprobFilterFlags ignoreSet)
 {
@@ -1901,14 +1418,6 @@ int rpmtsRun(rpmts ts, rpmps okProbs, rpmprobFilterFlags ignoreSet)
 	goto exit;
     }
 
-    if (!rpmpsNumProblems(tsprobs)) {
-	/* Run file triggers in this package other package(s) set off. */
-	runFileTriggers(ts, NULL, RPMSENSE_TRIGGERUN,
-			RPMSCRIPT_TRANSFILETRIGGER);
-	/* Run file triggers in other package(s) this package sets off. */
-	runTransScripts(ts, PKG_TRANSFILETRIGGERUN);
-    }
-
     /* Run pre-transaction scripts, but only if there are no known
      * problems up to this point and not disabled otherwise. */
     if (!((rpmtsFlags(ts) & (RPMTRANS_FLAG_BUILD_PROBS|RPMTRANS_FLAG_NOPRETRANS))
@@ -1943,7 +1452,6 @@ int rpmtsRun(rpmts ts, rpmps okProbs, rpmprobFilterFlags ignoreSet)
     if (!(rpmtsFlags(ts) & (RPMTRANS_FLAG_TEST|RPMTRANS_FLAG_BUILD_PROBS)))
 	tsmem->pool = rpmstrPoolFree(tsmem->pool);
 
-
     /* Actually install and remove packages, get final exit code */
     rc = rpmtsProcess(ts) ? -1 : 0;
 
@@ -1953,12 +1461,6 @@ int rpmtsRun(rpmts ts, rpmps okProbs, rpmprobFilterFlags ignoreSet)
 	runTransScripts(ts, PKG_POSTTRANS);
     }
 
-    /* Run file triggers in other package(s) this package sets off. */
-    runFileTriggers(ts, NULL, RPMSENSE_TRIGGERIN, RPMSCRIPT_TRANSFILETRIGGER);
-    runPostUnTransFileTrigs(ts);
-
-    /* Run file triggers in this package other package(s) set off. */
-    runTransScripts(ts, PKG_TRANSFILETRIGGERIN);
 exit:
     /* Run post transaction hook for all plugins */
     if (TsmPreDone) /* If TsmPre hook has been called, call the TsmPost hook */

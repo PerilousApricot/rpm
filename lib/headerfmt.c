@@ -64,8 +64,8 @@ struct sprintfToken_s {
 #define HASHTYPE tagCache
 #define HTKEYTYPE rpmTagVal
 #define HTDATATYPE rpmtd
-#include "lib/rpmhash.H"
-#include "lib/rpmhash.C"
+#include "lib/rpmhash_big.h"
+#include "lib/rpmhash_big.c"
 #undef HASHTYPE
 #undef HTKEYTYPE
 #undef HTDATATYPE
