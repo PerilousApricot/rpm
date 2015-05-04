@@ -18,7 +18,7 @@ extern "C" {
 #define HASHTYPE removedHash
 #define HTKEYTYPE unsigned int
 #define HTDATATYPE struct rpmte_s *
-#include "rpmhash.H"
+#include "rpmhash_big.h"
 #undef HASHTYPE
 #undef HTKEYTYPE
 #undef HTDATATYPE

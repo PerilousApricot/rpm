@@ -902,8 +902,8 @@ static void skipInstallFiles(const rpmts ts, rpmfiles files, rpmfs fs)
 
 #define HASHTYPE rpmStringSet
 #define HTKEYTYPE rpmsid
-#include "lib/rpmhash.H"
-#include "lib/rpmhash.C"
+#include "lib/rpmhash_big.h"
+#include "lib/rpmhash_big.c"
 
 static unsigned int sidHash(rpmsid sid)
 {

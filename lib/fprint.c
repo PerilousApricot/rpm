@@ -23,8 +23,8 @@
 #define HASHTYPE rpmFpEntryHash
 #define HTKEYTYPE rpmsid
 #define HTDATATYPE const struct fprintCacheEntry_s *
-#include "lib/rpmhash.H"
-#include "lib/rpmhash.C"
+#include "lib/rpmhash_big.h"
+#include "lib/rpmhash_big.c"
 
 /* Create by-fingerprint hash table */
 #undef HASHTYPE
@@ -33,8 +33,8 @@
 #define HASHTYPE rpmFpHash
 #define HTKEYTYPE const fingerPrint *
 #define HTDATATYPE struct rpmffi_s
-#include "lib/rpmhash.H"
-#include "lib/rpmhash.C"
+#include "lib/rpmhash_big.h"
+#include "lib/rpmhash_big.c"
 #undef HASHTYPE
 #undef HTKEYTYPE
 #undef HTDATATYPE

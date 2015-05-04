@@ -35,8 +35,8 @@ typedef struct hardlinks_s * hardlinks_t;
 #define HASHTYPE nlinkHash
 #define HTKEYTYPE int
 #define HTDATATYPE struct hardlinks_s *
-#include "lib/rpmhash.H"
-#include "lib/rpmhash.C"
+#include "lib/rpmhash_big.h"
+#include "lib/rpmhash_big.c"
 #undef HASHTYPE
 #undef HTKEYTYPE
 #undef HTDATATYPE
@@ -1256,8 +1256,8 @@ struct fileid_s {
 #define HASHTYPE fileidHash
 #define HTKEYTYPE struct fileid_s
 #define HTDATATYPE int
-#include "lib/rpmhash.H"
-#include "lib/rpmhash.C"
+#include "lib/rpmhash_big.h"
+#include "lib/rpmhash_big.c"
 #undef HASHTYPE
 #undef HTKEYTYPE
 #undef HTDATATYPE

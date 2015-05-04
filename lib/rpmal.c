@@ -49,8 +49,8 @@ struct fileNameEntry_s {
 #define HASHTYPE rpmalDepHash
 #define HTKEYTYPE rpmsid
 #define HTDATATYPE struct availableIndexEntry_s
-#include "lib/rpmhash.H"
-#include "lib/rpmhash.C"
+#include "lib/rpmhash_big.h"
+#include "lib/rpmhash_big.c"
 
 #undef HASHTYPE
 #undef HTKEYTYPE
@@ -58,8 +58,8 @@ struct fileNameEntry_s {
 #define HASHTYPE rpmalFileHash
 #define HTKEYTYPE struct fileNameEntry_s
 #define HTDATATYPE struct availableIndexEntry_s
-#include "lib/rpmhash.H"
-#include "lib/rpmhash.C"
+#include "lib/rpmhash_big.h"
+#include "lib/rpmhash_big.c"
 
 /** \ingroup rpmdep
  * Set of available packages, items, and directories.

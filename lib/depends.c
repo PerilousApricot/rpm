@@ -34,8 +34,8 @@ const int rpmFLAGS = RPMSENSE_EQUAL;
 #define HASHTYPE depCache
 #define HTKEYTYPE const char *
 #define HTDATATYPE int
-#include "lib/rpmhash.H"
-#include "lib/rpmhash.C"
+#include "lib/rpmhash_big.h"
+#include "lib/rpmhash_big.c"
 #undef HASHTYPE
 #undef HTKEYTYPE
 #undef HTDATATYPE
@@ -43,22 +43,22 @@ const int rpmFLAGS = RPMSENSE_EQUAL;
 #define HASHTYPE removedHash
 #define HTKEYTYPE unsigned int
 #define HTDATATYPE struct rpmte_s *
-#include "rpmhash.C"
+#include "rpmhash_big.c"
 #undef HASHTYPE
 #undef HTKEYTYPE
 #undef HTDATATYPE
 
 #define HASHTYPE conflictsCache
 #define HTKEYTYPE const char *
-#include "rpmhash.H"
-#include "rpmhash.C"
+#include "rpmhash_big.h"
+#include "rpmhash_big.c"
 #undef HASHTYPE
 #undef HTKEYTYPE
 
 #define HASHTYPE requiresCache
 #define HTKEYTYPE const char *
-#include "rpmhash.H"
-#include "rpmhash.C"
+#include "rpmhash_big.h"
+#include "rpmhash_big.c"
 #undef HASHTYPE
 #undef HTKEYTYPE
 
