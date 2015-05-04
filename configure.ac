@@ -548,6 +548,31 @@ AC_CHECK_FUNCS(lutimes)
 AC_CHECK_FUNCS(mergesort)
 AC_CHECK_FUNCS(getauxval)
 
+# Check for htonll
+# https://github.com/collectd/collectd/blob/1a822486f40287f552890a553181fd620c662ada/configure.ac
+AC_CACHE_CHECK([if have htonll defined],
+                  [c_cv_have_htonll],
+                  AC_LINK_IFELSE([AC_LANG_PROGRAM(
+[[[
+#include <sys/types.h>
+#include <netinet/in.h>
+#if HAVE_INTTYPES_H
+# include <inttypes.h>
+#endif
+]]],
+[[[
+          return htonll(0);
+]]]
+    )],
+    [c_cv_have_htonll="yes"],
+    [c_cv_have_htonll="no"]
+       )
+)
+if test "x$c_cv_have_htonll" = "xyes"
+then
+    AC_DEFINE(HAVE_HTONLL, 1, [Define if the function htonll exists.])
+fi
+
 AC_REPLACE_FUNCS(stpcpy stpncpy)
 
 AC_CHECK_FUNCS([secure_getenv __secure_getenv])
