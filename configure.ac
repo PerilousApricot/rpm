@@ -1,5 +1,5 @@
 AC_PREREQ(2.61)
-AC_INIT(rpm, 4.12.0, rpm-maint@lists.rpm.org)
+AC_INIT(rpm, 4.12.0.1, rpm-maint@lists.rpm.org)
 
 AC_CONFIG_SRCDIR([rpmqv.c])
 AC_CONFIG_HEADERS([config.h])
@@ -543,7 +543,27 @@ AC_TYPE_SIZE_T
 dnl Checks for library functions.
 AC_CHECK_FUNCS(putenv)
 AC_CHECK_FUNCS(mempcpy)
-AC_CHECK_FUNCS(fdatasync)
+# https://github.com/argiopetech/unix/commit/b06446edd4753f964a46d27ddae864fad97adc13
+AC_CHECK_FUNCS([fsync])
+
+# A more comprehensive check that fdatasync exits
+# Necessary for platforms that have fdatasync in headers but have no
+# implementation
+dnl Originally provided by user copiousfreetime for the beanstalkd project
+dnl {{{ make sure that fdatasync exits
+AC_CACHE_CHECK([for fdatasync],[ac_cv_func_fdatasync],[
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+#include <unistd.h>
+]],[[
+fdatasync(4);
+]])],
+[ac_cv_func_fdatasync=yes],
+[ac_cv_func_fdatasync=no])
+])
+AS_IF([test "x${ac_cv_func_fdatasync}" = "xyes"],
+ [AC_DEFINE([HAVE_FDATASYNC],[1],[If the system defines fdatasync])])
+dnl }}}
+
 AC_CHECK_FUNCS(lutimes)
 AC_CHECK_FUNCS(mergesort)
 AC_CHECK_FUNCS(getauxval)
