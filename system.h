@@ -92,6 +92,8 @@ char * stpncpy(char * dest, const char * src, size_t n);
 #define	__progname	__assert_program_name
 #endif
 #define	setprogname(pn)
+#elif defined __APPLE__
+#define __progname program_name
 #else
 #define	__progname	program_name
 #define	setprogname(pn)	\
